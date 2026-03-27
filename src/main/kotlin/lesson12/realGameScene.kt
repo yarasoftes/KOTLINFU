@@ -1,4 +1,5 @@
-package lesson12s
+package lesson12
+
 import de.fabmax.kool.KoolApplication           // KoolApplication - запускает Kool-приложение (окно + цикл рендера)
 import de.fabmax.kool.addScene                  // addScene - функция "добавь сцену" в приложение (у тебя она просила отдельный импорт)
 import de.fabmax.kool.math.Vec3f                // Vec3f - 3D-вектор (x, y, z), как координаты / направление
@@ -34,7 +35,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.processNextEventInCurrentThread
-import questJournal2.CmdSwitchPlayer
 import javax.accessibility.AccessibleValue
 import kotlin.math.sqrt
 
@@ -56,9 +56,10 @@ enum class WorldObjectType{
 data class WorldObjectDef(
     val id: String,
     val type: WorldObjectType,
-    val x: Float,
-    val z: Float,
-    val interactRadius: Float
+    var x: Float,
+    var z: Float,
+    val interactRadius: Float,
+    val trajectory: List<Pair<Float, Float>>
 )
 
 data class NpcMemory(
@@ -216,6 +217,11 @@ data class CmdMovePlayer(
     val dz: Float
 ): GameCommand
 
+data class CmdMoveNpc(
+    override val playerId: String,
+    val objId: String
+): GameCommand
+
 data class CmdInteract(
     override val playerId: String
 ): GameCommand
@@ -280,27 +286,39 @@ data class ServerMessage(
 ): GameEvent
 
 class GameServer {
-    val worldObjects = listOf(
+    val worldObjects = mutableListOf(
         WorldObjectDef(
             "alchemist",
             WorldObjectType.ALCHEMIST,
             -3f,
             0f,
-            1.7f
+            1.7f,
+            listOf(
+                -3f to -1f,
+                -3f to -2f,
+                -4f to -2f,
+                -5f to -2f,
+                -5f to -1f,
+                -5f to 0f,
+                -4f to 0f,
+                -3f to 0f
+            )
         ),
         WorldObjectDef(
             "herb_source",
             WorldObjectType.HERB_SOURCE,
             3f,
             0f,
-            1.7f
+            1.7f,
+            emptyList()
         ),
         WorldObjectDef(
             "treasure_box",
             WorldObjectType.CHEST,
             5f,
             0f,
-            2f
+            2f,
+            emptyList()
         )
     )
 
@@ -402,6 +420,27 @@ class GameServer {
         }
     }
 
+    private var debounce: Boolean = true
+    private suspend fun startMoveNpc(id: String) {
+        val index = worldObjects.indexOfFirst { it.id == id }
+        val trajectory = worldObjects.find { it.id == id }?.trajectory ?: emptyList()
+        coroutineScope {
+            debounce = true
+            while (true) {
+                for (pos in trajectory){
+                    if (debounce != true) break
+                    val obj = worldObjects[index]
+                    worldObjects[index] = obj.copy(x = pos.second, z = pos.first)
+                    delay(1000)
+                }
+            }
+        }
+    }
+
+    private fun randomChance(probability: Float): Boolean {
+        return kotlin.random.Random.nextFloat() < probability
+    }
+
     private suspend fun processCommand(cmd: GameCommand){
         when(cmd){
             is CmdMovePlayer -> {
@@ -412,6 +451,10 @@ class GameServer {
                     )
                 }
                 refreshPlayerArea(cmd.playerId)
+            }
+
+            is CmdMoveNpc -> {
+                startMoveNpc(cmd.objId)
             }
 
             is CmdInteract -> {
@@ -425,19 +468,27 @@ class GameServer {
 
                 when (obj.type){
                     WorldObjectType.ALCHEMIST -> {
+                        val player = getPlayerData(cmd.playerId)
+                        val distance = distance2D(player.posX, player.posZ, obj.x, obj.x)
+                        if (distance >= 2f){
+                            _events.emit(ServerMessage(cmd.playerId, "Ты отошел слишком далеко от Алхимика"))
+                            return
+                        }
+
                         if (player.alchemistMemory.sawPlayerNearSource == true){
                             _events.emit(ServerMessage(cmd.playerId, "Вижу, ты хотя бы дошёл до места, где растёт трава, ты ее принёс?"))
                         }
+
                         val oldMemory = player.alchemistMemory
                         val newMemory = oldMemory.copy(
                             hasMet = true,
                             timesTalked = oldMemory.timesTalked + 1
                         )
-
                         updatePlayer(cmd.playerId) { p ->
                             p.copy(alchemistMemory = newMemory)
                         }
 
+                        debounce = false
                         _events.emit(InteractedWithNpc(cmd.playerId, obj.id))
                         _events.emit(NpcMemoryChanged(cmd.playerId, newMemory))
                     }
@@ -445,6 +496,11 @@ class GameServer {
                     WorldObjectType.HERB_SOURCE -> {
                         if (player.questState != QuestState.WAIT_HERB){
                             _events.emit(ServerMessage(cmd.playerId, "Трава сейчас тебе не нужна - сначала возьми квест"))
+                            return
+                        }
+
+                        if(randomChance(0.5f)){
+                            _events.emit(ServerMessage(cmd.playerId, "Промах"))
                             return
                         }
 
@@ -459,7 +515,6 @@ class GameServer {
                         val oldCount = herbCount(player)
                         val newCount = oldCount + 1
                         val newInventory = player.inventory + ("herb" to newCount)
-
                         updatePlayer(cmd.playerId){p ->
                             p.copy(inventory = newInventory)
                         }
@@ -480,17 +535,9 @@ class GameServer {
 
             is CmdChooseDialogueOption -> {
                 val player = getPlayerData(cmd.playerId)
-                val distance = distance2D(player.posX, player.posZ, 5f, 0f)
-                // 5f 0f это позиция алхимика
-
 
                 if (player.currentAreaId != "alchemist"){
                     _events.emit(ServerMessage(cmd.playerId, "Сначала подойди к алхимику"))
-                    return
-                }
-
-                if (distance >= 2f){
-                    _events.emit(ServerMessage(cmd.playerId, "Ты отошел слишком далеко от Алхимика"))
                     return
                 }
 
@@ -632,12 +679,12 @@ fun main() = KoolApplication {
 
         val playerNode = addColorMesh {
             generate {
-                cube {
+                cube{
                     colored()
                 }
             }
-            shader = KslPbrShader {
-                color { vertexColor() }
+            shader = KslPbrShader{
+                color{vertexColor()}
                 metallic(0f)
                 roughness(0.25f)
             }
@@ -645,37 +692,37 @@ fun main() = KoolApplication {
 
         val alchemistNode = addColorMesh {
             generate {
-                cube {
+                cube{
                     colored()
                 }
             }
-            shader = KslPbrShader {
-                color { vertexColor() }
+            shader = KslPbrShader{
+                color{vertexColor()}
                 metallic(0f)
                 roughness(0.25f)
             }
         }
 
-        alchemistNode.transform.translate(3f, 0f, 0f)
+        alchemistNode.transform.translate(3f,0f,0f)
 
         val herbNode = addColorMesh {
             generate {
-                cube {
+                cube{
                     colored()
                 }
             }
-            shader = KslPbrShader {
-                color { vertexColor() }
+            shader = KslPbrShader{
+                color{vertexColor()}
                 metallic(0f)
                 roughness(0.25f)
             }
         }
 
 
-        herbNode.transform.translate(3f, 0f, 0f)
+        herbNode.transform.translate(3f,0f,0f)
 
         lighting.singleDirectionalLight {
-            setup(Vec3f(-1f, -1f, -1f))
+            setup(Vec3f(-1f,-1f,-1f))
             setColor(Color.WHITE, 5f)
         }
 
@@ -684,7 +731,7 @@ fun main() = KoolApplication {
         var lastRenderedX = 0f
         var lastRenderedZ = 0f
 
-        playerNode.onUpdate {
+        playerNode.onUpdate{
             val activeId = hud.activePlayerIdFlow.value
             val player = server.getPlayerData(activeId)
 
@@ -697,10 +744,10 @@ fun main() = KoolApplication {
             lastRenderedZ = player.posZ
         }
 
-        alchemistNode.onUpdate {
+        alchemistNode.onUpdate{
             transform.rotate(20f.deg * Time.deltaT, Vec3f.Y_AXIS)
         }
-        herbNode.onUpdate {
+        herbNode.onUpdate{
             transform.rotate(20f.deg * Time.deltaT, Vec3f.Y_AXIS)
         }
     }
@@ -722,7 +769,7 @@ fun main() = KoolApplication {
             .flatMapLatest { pid ->
                 server.events.filter { it.playerId == pid }
             }
-            .map { event ->
+            .map{ event ->
                 eventToText(event)
             }
             .onEach { line ->
@@ -741,79 +788,77 @@ fun main() = KoolApplication {
                 val player = hud.playerSnapShot.use()
                 val dialogue = buildAlchemistDialogue(player)
 
-                Text("Игрок: ${hud.activePLayerIdUi.use()}") { modifier.margin(bottom = sizes.gap) }
-                Text("Позиция: x=${"%.1f".format(player.posX)} z=${"%.1f".format(player.posZ)}") {}
-                Text("Quest State: ${player.questState}") { modifier.font(sizes.smallText) }
-                Text(currentObjective(player)) { modifier.font(sizes.smallText) }
-                Text(formatInventory(player)) { modifier.font(sizes.smallText).margin(bottom = sizes.smallGap) }
-                Text("Gold: ${player.gold}") { modifier.font(sizes.smallText) }
-                Text("Hint: ${player.hintText}") { modifier.font(sizes.smallText) }
-                Text("Npc Memory: ${formatMemory(player.alchemistMemory)}") {
-                    modifier.font(sizes.smallText).margin(bottom = sizes.smallGap)
-                }
+                Text("Игрок: ${hud.activePLayerIdUi.use()}"){ modifier.margin(bottom = sizes.gap) }
+                Text("Позиция: x=${"%.1f".format(player.posX)} z=${"%.1f".format(player.posZ)}"){}
+                Text("Quest State: ${player.questState}"){ modifier.font(sizes.smallText) }
+                Text(currentObjective(player)){ modifier.font(sizes.smallText) }
+                Text(formatInventory(player)){ modifier.font(sizes.smallText).margin(bottom = sizes.smallGap) }
+                Text("Gold: ${player.gold}"){ modifier.font(sizes.smallText) }
+                Text("Hint: ${player.hintText}"){ modifier.font(sizes.smallText) }
+                Text("Npc Memory: ${formatMemory(player.alchemistMemory)}"){ modifier.font(sizes.smallText).margin(bottom = sizes.smallGap) }
 
                 Row {
-                    Button("Сменить игрока") {
-                        modifier.margin(end = 8.dp).onClick {
-                            val newId = if (hud.activePLayerIdUi.value == "Oleg") "Stas" else "Oleg"
+                    Button("Сменить игрока"){
+                        modifier.margin(end = 8.dp).onClick{
+                            val newId = if(hud.activePLayerIdUi.value == "Oleg") "Stas" else "Oleg"
 
                             hud.activePLayerIdUi.value = newId
                             hud.activePlayerIdFlow.value = newId
                         }
                     }
-                    Button("Сбросить игрока") {
-                        modifier.onClick {
+                    Button("Сбросить игрока"){
+                        modifier.onClick{
                             server.trySend(CmdResetPlayer(player.playerId))
                         }
                     }
                 }
 
-                Text("Движение в мире:") { modifier.margin(top = sizes.gap) }
+                Text("Движение в мире:"){ modifier.margin(top = sizes.gap) }
 
                 Row {
-                    Button("Лево") {
+                    Button("Лево"){
                         modifier.margin(end = 8.dp).onClick {
                             server.trySend(CmdMovePlayer(player.playerId, dx = -0.5f, dz = 0f))
                         }
                     }
-                    Button("Право") {
+                    Button("Право"){
                         modifier.margin(end = 8.dp).onClick {
                             server.trySend(CmdMovePlayer(player.playerId, dx = 0.5f, dz = 0f))
                         }
                     }
-                    Button("Вперед") {
+                    Button("Вперед"){
                         modifier.margin(end = 8.dp).onClick {
                             server.trySend(CmdMovePlayer(player.playerId, dx = 0f, dz = -0.5f))
                         }
                     }
-                    Button("Назад") {
+                    Button("Назад"){
                         modifier.margin(end = 8.dp).onClick {
                             server.trySend(CmdMovePlayer(player.playerId, dx = 0f, dz = 0.5f))
                         }
                     }
                 }
-                Text("Взаимодействия:") { modifier.margin(top = sizes.gap) }
+                Text("Взаимодействия:"){ modifier.margin(top = sizes.gap) }
 
                 Row {
-                    Button("Потрогать ближайшего") {
-                        modifier.margin(end = 8.dp).onClick {
+                    Button("Потрогать ближайшего"){
+                        modifier.margin(end = 8.dp).onClick{
                             server.trySend(CmdInteract(player.playerId))
                         }
                     }
                 }
 
-                Text(dialogue.npcId) { modifier.margin(top = sizes.gap) }
-                Text(dialogue.text) { modifier.margin(bottom = sizes.smallGap) }
+                Text(dialogue.npcId){ modifier.margin(top = sizes.gap) }
+                Text(dialogue.text){ modifier.margin(bottom = sizes.smallGap) }
 
-                if (dialogue.option.isEmpty()) {
-                    Text("Нет доступных варинатов ответа") {
+                if(dialogue.option.isEmpty()){
+                    Text("Нет доступных варинатов ответа"){
                         modifier.font(sizes.smallText).margin(bottom = sizes.gap)
                     }
-                } else {
-                    Row {
-                        for (option in dialogue.option) {
-                            Button(option.text) {
-                                modifier.margin(end = 8.dp).onClick {
+                }else{
+                    Row{
+                        for (option in dialogue.option){
+                            Button(option.text){
+                                modifier.margin(end = 8.dp).onClick{
                                     server.trySend(
                                         CmdChooseDialogueOption(
                                             player.playerId,
@@ -825,12 +870,43 @@ fun main() = KoolApplication {
                         }
                     }
                 }
-                Text("Лог: ") { modifier.margin(top = sizes.gap) }
+                Text("Лог: "){modifier.margin(top = sizes.gap)}
 
-                for (line in hud.log.use()) {
-                    Text(line) { modifier.font(sizes.smallText) }
+                for(line in hud.log.use()){
+                    Text(line){ modifier.font(sizes.smallText) }
                 }
             }
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
