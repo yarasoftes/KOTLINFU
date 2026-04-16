@@ -42,6 +42,11 @@ import kotlin.math.sin
 import kotlin.math.cos
 import kotlin.random.Random
 
+// ========== ИМПОРТЫ ДЛЯ ЗВУКА ==========
+import javax.sound.sampled.AudioSystem as JavaAudioSystem
+import javax.sound.sampled.Clip
+import java.io.File
+
 enum class QuestState{
     START,
     WAIT_HERB,
@@ -56,7 +61,6 @@ enum class Facing{
     BACK
 }
 
-// типы объектов
 enum class WorldObjectType{
     ALCHEMIST,
     HERB_SOURCE,
@@ -68,7 +72,6 @@ data class GridPos(
     val z: Int
 )
 
-// описание объектов в игровом мире
 data class WorldObjectDef(
     val id: String,
     val type: WorldObjectType,
@@ -97,11 +100,80 @@ data class PlayerState(
     val facing: Facing
 )
 
+// ========== ФУНКЦИЯ ВОСПРОИЗВЕДЕНИЯ ВИДЕО ==========
+// Файл видео нужно положить в корень проекта (рядом с папкой src)
+// Название файла: victory.mp4 (или измените в кавычках)
+fun playVictoryVideo() {
+    try {
+        // КУДА ВСТАВЛЯТЬ ФАЙЛ ВИДЕО: положите файл в корень проекта
+        // КУДА ВСТАВЛЯТЬ ИМЯ ФАЙЛА: замените "victory.mp4" на имя вашего файла
+        val videoFile = File("vecteezy_confetti-glow-explosion-with-alpha-channel_3448912.mp4")
+
+        if (!videoFile.exists()) {
+            println("Видео файл не найден: victory.mp4")
+            println("Положите файл в папку: ${System.getProperty("user.dir")}")
+            return
+        }
+
+        val os = System.getProperty("os.name").lowercase()
+        val command = when {
+            os.contains("win") -> arrayOf("cmd", "/c", "start", videoFile.absolutePath)
+            os.contains("mac") -> arrayOf("open", videoFile.absolutePath)
+            else -> arrayOf("xdg-open", videoFile.absolutePath)
+        }
+
+        val process = Runtime.getRuntime().exec(command)
+
+        // Закрываем видео через 10 секунд
+        Thread {
+            Thread.sleep(10000)
+            process.destroy()
+        }.start()
+    } catch (e: Exception) {
+        println("Ошибка воспроизведения видео: ${e.message}")
+    }
+}
+
+// ========== ФУНКЦИЯ ВОСПРОИЗВЕДЕНИЯ ЗВУКА ==========
+// Файл звука нужно положить в корень проекта (рядом с папкой src)
+// Название файла: victory.wav (или измените в кавычках)
+fun playVictorySound() {
+    try {
+        // КУДА ВСТАВЛЯТЬ ФАЙЛ ЗВУКА: положите файл в корень проекта
+        // КУДА ВСТАВЛЯТЬ ИМЯ ФАЙЛА: замените "victory.wav" на имя вашего файла
+        val audioFile = File("dramatic-moment.mp3")
+
+        if (!audioFile.exists()) {
+            println("Звуковой файл не найден: victory.wav")
+            println("Положите файл в папку: ${System.getProperty("user.dir")}")
+            return
+        }
+
+        val audioStream = JavaAudioSystem.getAudioInputStream(audioFile)
+        val clip = JavaAudioSystem.getClip()
+        clip.open(audioStream)
+        clip.start()
+
+        // Останавливаем звук через 10 секунд
+        Thread {
+            Thread.sleep(10000)
+            clip.stop()
+            clip.close()
+        }.start()
+    } catch (e: Exception) {
+        println("Ошибка воспроизведения звука: ${e.message}")
+    }
+}
+
+// ========== ФУНКЦИЯ ВОСПРОИЗВЕДЕНИЯ ЗВУКА КОНФЕТТИ ==========
+// Файл звука нужно положить в корень проекта
+// Название файла: confetti.wav (или измените в кавычках)
+
+
 fun herbCount(player: PlayerState): Int{
     return player.inventory["herb"] ?: 0
 }
 
-//d = √((x₂ - x₁)² + (y₂ - y₁)²)
 fun distance2D(ax: Float, az: Float, bx: Float, bz: Float): Float{
     val dx = ax - bx
     val dz = az - bz
@@ -340,13 +412,11 @@ data class CutSceneFinished(
     val cutsceneId: String
 ): GameEvent
 
-// НОВОЕ СОБЫТИЕ - ПОБЕДА
 data class VictoryEvent(
     override val playerId: String,
     val reason: String
 ): GameEvent
 
-// Класс для частицы конфетти
 data class ConfettiParticle(
     var x: Float,
     var y: Float,
@@ -361,13 +431,11 @@ data class ConfettiParticle(
 
 class GameServer {
 
-    // размер карты
     private val minX = -5
     private val maxX = 5
     private val minZ = -4
     private val maxZ = 4
 
-    // подготовка клеток на которые нельзя зайти
     private val blockedCells = setOf(
         GridPos(-1, 1),
         GridPos(0, 1),
@@ -653,7 +721,6 @@ class GameServer {
                         _events.emit(GoldCountChanged(cmd.playerId, newCountGold))
                         _events.emit(ServerMessage(cmd.playerId, "Ты открыл сундук и нашел 10 золотых монет! Сундук исчез."))
 
-                        // ОТПРАВЛЯЕМ СОБЫТИЕ ПОБЕДЫ ПРИ ОТКРЫТИИ СУНДУКА
                         _events.emit(VictoryEvent(cmd.playerId, "Сундук открыт! Квест завершен!"))
                     }
                 }
@@ -726,7 +793,6 @@ class GameServer {
                         _events.emit(QuestStateChanged(cmd.playerId,  QuestState.GOOD_END))
                         _events.emit(ServerMessage(cmd.playerId, "Алхимик получил траву и выдал тебе золото"))
 
-                        // ОТПРАВЛЯЕМ СОБЫТИЕ ПОБЕДЫ ПРИ СДАЧЕ КВЕСТА
                         _events.emit(VictoryEvent(cmd.playerId, "Квест выполнен! Алхимик благодарен!"))
                     }
 
@@ -750,8 +816,8 @@ class HudState{
     val playerSnapShot = mutableStateOf(initialPlayerState("Oleg"))
     val log = mutableStateOf<List<String>>(emptyList())
 
-    // Флаг для отображения конфетти
     val showConfetti = mutableStateOf(false)
+    val showVictoryGif = mutableStateOf(false)
 }
 
 fun hudLog(hud: HudState, line: String){
@@ -805,7 +871,7 @@ fun eventToText(e:  GameEvent): String{
         is  QuestStateChanged -> "QuestStateChanged ${e.newState}"
         is  NpcMemoryChanged -> "NpcMemoryChanged Встретился: ${e.memory.hasMet}, сколько раз поговорил: ${e.memory.timesTalked}, отдал траву: ${e.memory.receivedHerb}"
         is  ServerMessage -> "Server: ${e.text}"
-        is VictoryEvent -> "🎉 ПОБЕДА! ${e.reason} 🎉"
+        is VictoryEvent -> "ПОБЕДА! ${e.reason}"
         else -> ""
     }
 }
@@ -814,13 +880,11 @@ fun main() = KoolApplication {
     val hud = HudState()
     val server = GameServer()
 
-    // Система частиц конфетти
     val confettiParticles = mutableListOf<ConfettiParticle>()
 
     addScene {
         defaultOrbitCamera()
 
-        // строим пол из мелких кубов
         for (x in -5 .. 5){
             for (z in -4 .. 4){
                 addColorMesh {
@@ -924,7 +988,6 @@ fun main() = KoolApplication {
             }
         }
 
-        // Создаем частицы конфетти - используем простые кубы
         val confettiCubes = mutableListOf<ColorMesh>()
         repeat(50) { index ->
             val cube = ColorMesh().apply {
@@ -987,10 +1050,8 @@ fun main() = KoolApplication {
             lastAppliedYaw = targetYaw
         }
 
-        // Обновление конфетти
         onUpdate {
             if (hud.showConfetti.value) {
-                // Инициализация частиц если их нет
                 if (confettiParticles.isEmpty()) {
                     repeat(100) {
                         val angle = Random.nextFloat() * 2f * Math.PI.toFloat()
@@ -1016,7 +1077,6 @@ fun main() = KoolApplication {
                     }
                 }
 
-                // Обновление существующих частиц
                 val gravity = -5f
                 val dt = Time.deltaT
 
@@ -1041,31 +1101,26 @@ fun main() = KoolApplication {
                             val cube = confettiCubes[particleIndex]
                             cube.isVisible = true
 
-                            // Перемещаем куб
                             val transform = cube.transform
                             transform.translate(particle.x, particle.y, particle.z)
-                            transform.scale(particle.size)  //
+                            transform.scale(particle.size)
                         }
                     }
                     particleIndex++
                 }
 
-                // Удаляем мертвые частицы
                 confettiParticles.removeAll(toRemove)
 
-                // Скрываем неиспользуемые кубы
                 var index = confettiParticles.size
                 while (index < confettiCubes.size) {
                     confettiCubes[index].isVisible = false
                     index++
                 }
 
-                // Если частицы закончились, выключаем режим конфетти
                 if (confettiParticles.isEmpty()) {
                     hud.showConfetti.value = false
                 }
             } else {
-                // Скрываем все кубы
                 confettiParticles.clear()
                 var index = 0
                 while (index < confettiCubes.size) {
@@ -1102,12 +1157,23 @@ fun main() = KoolApplication {
             }
             .launchIn(coroutineScope)
 
-        // Подписка на событие победы для запуска конфетти
         server.events
             .filter { it is VictoryEvent && it.playerId == hud.activePlayerIdUi.value }
             .onEach {
                 hud.showConfetti.value = true
-                hudLog(hud, "🎊 Конфетти запущены! Поздравляем с победой! 🎊")
+                hud.showVictoryGif.value = true
+
+                // ========== ВЫЗОВ ВИДЕО И ЗВУКА ПРИ ПОБЕДЕ ==========
+                playVictoryVideo()
+                playVictorySound()
+
+
+                hudLog(hud, "Победа! Поздравляем!")
+
+                coroutineScope.launch {
+                    delay(10000)
+                    hud.showVictoryGif.value = false
+                }
             }
             .launchIn(coroutineScope)
 
@@ -1227,9 +1293,8 @@ fun main() = KoolApplication {
                     }
                 }
 
-                // Победный экран при GOOD_END
                 if (player.questState == QuestState.GOOD_END) {
-                    Text("🎉 ПОБЕДА! 🎉") {
+                    Text("ПОБЕДА!") {
                         modifier
                             .margin(top = sizes.gap)
                             .font(sizes.largeText)
@@ -1238,6 +1303,14 @@ fun main() = KoolApplication {
                         modifier
                             .font(sizes.normalText)
                             .margin(bottom = sizes.smallGap)
+                    }
+
+                    if (hud.showVictoryGif.value) {
+                        Text("ВИДЕО ПОБЕДЫ ВОСПРОИЗВОДИТСЯ...") {
+                            modifier
+                                .font(sizes.normalText)
+                                .margin(top = 8.dp, bottom = 8.dp)
+                        }
                     }
                 }
 
