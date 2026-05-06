@@ -18,13 +18,11 @@ import kotlinx.coroutines.flow.asStateFlow          // отдать только
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.launchIn
 
-//-=-=| Игрок
 data class PlayerState(
     val playerId: String,
     val hp: Int,
 )
 
-//-=-=| Комманды
 sealed interface GameCommand { val playerId: String }
 
 data class CmdTakeDmg(
@@ -37,7 +35,6 @@ data class CmdLog(
     val event: String
 ) : GameCommand
 
-//-=-=| Сервер
 private val _players = MutableStateFlow(
     mapOf("p1" to PlayerState("p1", 100))
 )
@@ -73,7 +70,6 @@ fun main() = KoolApplication {
     val hpState = mutableStateOf(100)
     val isDead = mutableStateOf(false)
 
-
     val scope = CoroutineScope(Dispatchers.Default)
     scope.launch {
         cmdFlow.collect { processCommand(it) }
@@ -87,7 +83,7 @@ fun main() = KoolApplication {
 
     addScene {
         setupUiScene(ClearColorLoad)
-        //-=-=| Правый верх угол
+
         addPanelSurface {
             modifier
                 .align(AlignmentX.Start, AlignmentY.Top)
@@ -110,10 +106,9 @@ fun main() = KoolApplication {
                         }
                     }
                 }
-
             }
         }
-        //-=-=| Левый ниж угол
+
         addPanelSurface {
             modifier
                 .align(AlignmentX.End, AlignmentY.Bottom)
@@ -136,7 +131,6 @@ fun main() = KoolApplication {
                     .background(RoundRectBackground(Color.RED, 8.dp))
             }
 
-            //> экран смерти
             if (hpState.use() == 0) {
                 addPanelSurface {
                     Text("ЕБАТЬ ТЫ ЛОХ ХАХАХАХХАХАХАХАХАХ") {
@@ -145,7 +139,6 @@ fun main() = KoolApplication {
                             .textColor(Color.WHITE)
                     }
                 }
-
             }
         }
     }
